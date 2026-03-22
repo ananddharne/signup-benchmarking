@@ -40,6 +40,12 @@ describe('PageClassificationSchema', () => {
   })
 })
 
+describe('FormFieldSchema', () => {
+  it('rejects non-boolean required field', () => {
+    expect(() => FormFieldSchema.parse({ label: 'Email', type: 'email', required: 'yes' })).toThrow()
+  })
+})
+
 describe('StepMetricsSchema', () => {
   const validMetrics = {
     clickCount: 2,
@@ -82,6 +88,19 @@ describe('StepDataSchema', () => {
       }
     }
     expect(() => StepDataSchema.parse(step)).not.toThrow()
+  })
+
+  it('rejects invalid pageType value', () => {
+    expect(() => StepDataSchema.parse({
+      stepIndex: 0,
+      pageType: 'checkout',
+      url: 'https://example.com',
+      metrics: {
+        clickCount: 1, formFields: [], oauthProviders: [], hasMagicLink: false,
+        pageLoadMs: null, stepDurationMs: 800, a11yViolations: 0,
+        a11yCritical: 0, a11ySerious: 0, interactiveElements: 3, domNodeCount: 50
+      }
+    })).toThrow()
   })
 })
 

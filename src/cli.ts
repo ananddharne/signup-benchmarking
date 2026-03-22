@@ -21,7 +21,7 @@ function writeReport(report: CrawlReport, category: string | undefined, url: str
   const timestamp = Date.now()
   const sanitized = sanitizeUrl(url)
   const filename = category
-    ? `${category}-${sanitized}-${timestamp}.json`
+    ? `${sanitizeUrl(category)}-${sanitized}-${timestamp}.json`
     : `${sanitized}-${timestamp}.json`
   const outPath = join('reports', filename)
   writeFileSync(outPath, JSON.stringify(report, null, 2))

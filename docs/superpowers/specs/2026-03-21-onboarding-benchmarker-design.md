@@ -294,15 +294,17 @@ Pure Playwright instrumentation. Stateless between crawls — new instance per `
 
 **Single URL:**
 ```
-npx ts-node src/cli.ts --url https://airtable.com --email test@example.com
+npm run crawl -- --url https://airtable.com --email test@example.com
 ```
 Output: `reports/{sanitized-url}-{timestamp}.json`
 
 **Batch (CSV with `category,url` headers):**
 ```
-npx ts-node src/cli.ts --csv sites.csv --email test@example.com
+npm run crawl -- --csv sites.csv --email test@example.com
 ```
 Output per row: `reports/{category}-{sanitized-url}-{timestamp}.json`
+
+The `crawl` script is defined in `package.json` as `tsx src/cli.ts`. The `tsx` package handles TypeScript execution at runtime; `ts-node` is not used.
 
 **Timestamp format:** Unix epoch milliseconds (e.g., `1742563800000`). Safe across all operating systems and shells. `CrawlRunner` captures `const now = new Date()` at crawl start and uses `now.toISOString()` for `BuildMeta.crawledAt` and `now.getTime()` for the filename — same instant, different formats.
 

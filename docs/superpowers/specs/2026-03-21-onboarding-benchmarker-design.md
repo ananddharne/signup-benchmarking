@@ -33,7 +33,7 @@ MetricsCollector (src/metrics/MetricsCollector.ts)
   └─ startStep() / endStep() bracket pattern
 
 ReportBuilder (src/report/ReportBuilder.ts)
-  └─ pure function: StepData[] + metadata → CrawlReport (Zod-validated)
+  └─ pure function: StepData[] + BuildMeta → CrawlReport (Zod-validated)
 
 Zod schemas (src/schemas/)
   └─ dual-use: Stagehand extract() schemas + report validation
@@ -74,6 +74,8 @@ const PageClassification = z.object({
 })
 ```
 
+`confidence` usage: if `'low'`, `FlowCrawler` treats the page as `'unknown'` and stops with `stoppedReason: 'unclassifiable_page'`.
+
 ### `src/schemas/metrics.ts`
 
 ```typescript
@@ -87,6 +89,7 @@ const StepMetrics = z.object({
   clickCount: z.number(),
   formFields: z.array(FormField),
   oauthProviders: z.array(z.string()),
+  hasMagicLink: z.boolean(),
   pageLoadMs: z.number().nullable(),
   stepDurationMs: z.number(),
   a11yViolations: z.number(),
@@ -107,15 +110,24 @@ const StepData = z.object({
 ### `src/schemas/report.ts`
 
 ```typescript
+const StoppedReason = z.enum([
+  'dashboard_reached',
+  'email_verification_wall',
+  'oauth_wall',
+  'payment_wall',
+  'captcha_detected',
+  'login_redirect',
+  'max_steps_reached',
+  'unclassifiable_page',
+  'error'
+])
+
 const CrawlReport = z.object({
   url: z.string(),
   category: z.string().optional(),
   crawledAt: z.string().datetime(),
   completedSuccessfully: z.boolean(),
-  stoppedReason: z.enum([
-    'dashboard_reached', 'email_verification_wall', 'captcha_detected',
-    'max_steps_reached', 'unclassifiable_page', 'error'
-  ]),
+  stoppedReason: StoppedReason,
   steps: z.array(StepData),
   summary: z.object({
     totalSteps: z.number(),
@@ -137,32 +149,108 @@ const CrawlReport = z.object({
 
 ---
 
+## Component Interfaces
+
+### `CrawlRunner`
+
+```typescript
+interface CrawlRunnerOptions {
+  email?: string
+  timeoutMs?: number  // per-step timeout, default 30_000
+}
+
+class CrawlRunner {
+  constructor(options: CrawlRunnerOptions) {}
+  async run(url: string, category?: string): Promise<CrawlReport>
+}
+```
+
+### `FlowCrawler`
+
+```typescript
+interface FlowCrawlerOptions {
+  stagehand: Stagehand
+  collector: MetricsCollector
+  email?: string
+  maxSteps?: number      // default 20
+  stepTimeoutMs?: number // default 30_000
+}
+
+class FlowCrawler {
+  constructor(options: FlowCrawlerOptions) {}
+  async crawl(url: string): Promise<{ steps: StepData[]; stoppedReason: StoppedReason }>
+}
+```
+
+### `MetricsCollector`
+
+```typescript
+class MetricsCollector {
+  constructor(page: Page) {}
+  async startStep(): Promise<void>   // async: snapshots window.__clickCount via page.evaluate()
+  async endStep(): Promise<StepMetrics>
+}
+```
+
+### `ReportBuilder`
+
+```typescript
+interface BuildMeta {
+  url: string
+  category?: string
+  crawledAt: string       // ISO 8601 string: new Date().toISOString()
+  emailUsed?: string
+  stoppedReason: StoppedReason
+}
+
+class ReportBuilder {
+  static build(steps: StepData[], meta: BuildMeta): CrawlReport
+}
+```
+
+`ReportBuilder.build()` handles empty or partial `steps[]` gracefully: all summary numeric fields default to `0`, array fields default to `[]`, boolean flags default to `false`. Empty `steps` is valid — the report is still Zod-parseable.
+
+`completedSuccessfully` is derived as `meta.stoppedReason === 'dashboard_reached'`. It is not passed explicitly in `BuildMeta`.
+
+`summary.oauthProviders` is the deduplicated union of `oauthProviders` across all steps (same provider on multiple steps appears once).
+
+---
+
 ## FlowCrawler Step Loop
 
 **Initialization:**
-- Inject click counter script via `addInitScript` (capture phase, survives navigations)
+- Inject click counter script via `addInitScript` (capture phase, survives navigations):
+  ```javascript
+  window.__clickCount = 0
+  document.addEventListener('click', () => window.__clickCount++, true)
+  ```
 - Navigate to starting URL
 
-**Loop (max 20 steps):**
+**Loop (max 20 steps, default per-step timeout 30s):**
 
-1. `collector.startStep()`
+1. `await collector.startStep()`
 2. Classify page → `PageClassification` via `stagehand.extract()` with `PageClassification` schema
-3. If `isTerminal` → break, record `stoppedReason`
-4. Act based on `pageType`:
+3. If `confidence === 'low'` → treat as `'unknown'`
+4. If `isTerminal` → break, record `stoppedReason`. Terminal pages are **not** appended to `steps[]` — the break skips `endStep()` and `StepData` collection. The terminal `pageType` is therefore not included in `summary.flowPath`.
+5. Act based on `pageType`:
    - `landing` → two-pass CTA detection (see below)
    - `signup_form` → fill form with dummy data + `--email` value, submit
-   - `oauth_consent` → record providers, stop (`email_verification_wall`)
+   - `login_form` → stop, `stoppedReason: 'login_redirect'`
+   - `oauth_consent` → record providers, stop, `stoppedReason: 'oauth_wall'`
+   - `email_verification` → stop, `stoppedReason: 'email_verification_wall'`
    - `onboarding_step` / `onboarding_survey` / `workspace_setup` → advance (Next / Continue / Skip)
    - `plan_selection` → select free tier if present, else skip
-   - `payment` → stop, `stoppedReason: 'dashboard_reached'` is wrong — record as terminal
-   - `email_verification` → stop, `stoppedReason: 'email_verification_wall'`
+   - `payment` → stop, `stoppedReason: 'payment_wall'`
+   - `dashboard` → stop, `stoppedReason: 'dashboard_reached'`, `completedSuccessfully: true`
    - `unknown` → stop, `stoppedReason: 'unclassifiable_page'`
-5. `collector.endStep()` → `StepMetrics`
-6. Append `StepData` to `steps[]`
+6. `const metrics = await collector.endStep()`
+7. Append `StepData` to `steps[]`
 
-**After loop:** `ReportBuilder.build(steps, meta)` → `CrawlReport` → Zod parse → return.
+If step times out (per-step timeout exceeded): stop loop, `stoppedReason: 'error'`, emit partial report.
 
-**Error handling:** Any thrown error catches, sets `stoppedReason: 'error'`, emits partial report with steps collected so far.
+**After loop:** pass `steps[]` and metadata to `ReportBuilder.build()` → `CrawlReport` → Zod parse → return.
+
+**Error handling:** Any thrown error in the loop catches, sets `stoppedReason: 'error'`, calls `ReportBuilder.build()` with steps collected so far (may be empty array), returns partial report.
 
 **Two-pass CTA detection (landing pages only):**
 1. `extract()` with schema `{ signupUrl: z.string().optional(), signupText: z.string().optional() }` — structured, fast
@@ -184,28 +272,20 @@ const DUMMY_USER = {
 
 Pure Playwright instrumentation. Stateless between crawls — new instance per `CrawlRunner` invocation.
 
-**Interface:**
-```typescript
-class MetricsCollector {
-  constructor(page: Page) {}
-  startStep(): void
-  async endStep(): Promise<StepMetrics>
-}
-```
-
-**Click counting:** `addInitScript` injects `window.__clickCount = 0` with a capture-phase listener. `startStep()` snapshots, `endStep()` diffs.
+**Click counting:** `addInitScript` injects `window.__clickCount = 0` with a capture-phase listener. `startStep()` calls `page.evaluate(() => window.__clickCount)` to snapshot the value. `endStep()` calls `evaluate` again and diffs.
 
 **Metric collection at `endStep()`:**
 
 | Metric | Method |
 |---|---|
-| Click delta | `window.__clickCount` diff |
+| Click delta | `page.evaluate()` diff on `window.__clickCount` |
 | Form fields | `page.$$eval('input, select, textarea', ...)` — label via `aria-label`, `<label for>`, placeholder fallback |
 | OAuth providers | `page.$$eval('a, button', ...)` — pattern match text/href against `['google', 'github', 'microsoft', 'apple', 'slack', 'okta', 'saml']` |
-| Page load time | `performance.getEntriesByType('navigation')[0].duration` — null if no navigation |
-| Step duration | `Date.now()` diff |
+| Magic link | `page.$$eval('a, button', ...)` — pattern match text against `['magic link', 'passwordless', 'email me a link', 'sign in with email']` → `boolean` |
+| Page load time | `performance.getEntriesByType('navigation')[0].duration` — null if no navigation since last step |
+| Step duration | `Date.now()` diff between `startStep()` / `endStep()` |
 | Axe-core | `new AxeBuilder({ page }).withTags(['wcag2a','wcag2aa']).analyze()` |
-| Interactive elements | `page.$$eval('[role=button], button, a, input, select, textarea', ...)` |
+| Interactive elements | `page.$$eval('[role=button], button, a, input, select, textarea', els => els.length)` |
 | DOM nodes | `document.querySelectorAll('*').length` |
 
 ---
@@ -216,15 +296,19 @@ class MetricsCollector {
 ```
 npx ts-node src/cli.ts --url https://airtable.com --email test@example.com
 ```
+Output: `reports/{sanitized-url}-{timestamp}.json`
 
 **Batch (CSV with `category,url` headers):**
 ```
 npx ts-node src/cli.ts --csv sites.csv --email test@example.com
 ```
+Output per row: `reports/{category}-{sanitized-url}-{timestamp}.json`
 
-CSV batch: iterates rows sequentially, calls `CrawlRunner` once per URL, writes one report file per row: `reports/{category}-{sanitized-url}-{timestamp}.json`.
+**Timestamp format:** Unix epoch milliseconds (e.g., `1742563800000`). Safe across all operating systems and shells. `CrawlRunner` captures `const now = new Date()` at crawl start and uses `now.toISOString()` for `BuildMeta.crawledAt` and `now.getTime()` for the filename — same instant, different formats.
 
-**Output:** JSON file(s) in `./reports/` directory.
+**URL sanitization rule:** strip protocol (`https://`), replace any character that is not alphanumeric or hyphen with a hyphen, collapse consecutive hyphens, truncate to 60 characters. Example: `https://app.airtable.com/signup` → `app-airtable-com-signup`.
+
+**CSV batch:** iterates rows sequentially (no parallelism in v1). Writes one report file per row. Continues to next URL if a crawl errors.
 
 ---
 
@@ -235,15 +319,15 @@ CSV batch: iterates rows sequentially, calls `CrawlRunner` once per URL, writes 
 | Test file | What it covers |
 |---|---|
 | `tests/unit/metrics.test.ts` | Each `MetricsCollector` method against `page.setContent()` mock DOM |
-| `tests/unit/report.test.ts` | `ReportBuilder` aggregation with fixture `StepData[]` arrays |
-| `tests/unit/schemas.test.ts` | Zod schemas: valid + invalid inputs, edge cases |
+| `tests/unit/report.test.ts` | `ReportBuilder.build()` aggregation with fixture `StepData[]`; empty steps case |
+| `tests/unit/schemas.test.ts` | Zod schemas: valid + invalid inputs, edge cases (null pageLoadMs, empty steps, all stoppedReason values) |
 | `tests/unit/dispatch.test.ts` | FlowCrawler page-type dispatch with mocked Stagehand + MetricsCollector |
 
 **Acceptance-level (shape assertions only):**
 
 | Test file | What it covers |
 |---|---|
-| `tests/acceptance/crawl.test.ts` | Full crawl against Airtable (or similar). Asserts report parses Zod schema, `steps.length > 0`, `flowPath` contains `'landing'`, `stoppedReason` is a known enum value |
+| `tests/acceptance/crawl.test.ts` | Full crawl against Airtable. Asserts: report parses Zod schema, `steps.length > 0`, `flowPath` contains `'landing'`, `stoppedReason` is a known enum value |
 
 ---
 

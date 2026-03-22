@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
 import { chromium } from 'playwright'
-import type { Browser, Page } from 'playwright'
+import type { Browser, BrowserContext, Page } from 'playwright'
 import { MetricsCollector } from '../../src/metrics/MetricsCollector'
 
 let browser: Browser
+let context: BrowserContext
 let page: Page
 
 beforeAll(async () => {
@@ -15,12 +16,12 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-  const context = await browser.newContext()
+  context = await browser.newContext()
   page = await context.newPage()
 })
 
 afterEach(async () => {
-  await page.close()
+  await context.close()
 })
 
 async function setupPage(html: string) {
@@ -174,5 +175,30 @@ describe('MetricsCollector — step duration', () => {
     await collector.startStep()
     const metrics = await collector.endStep()
     expect(metrics.stepDurationMs).toBeGreaterThan(0)
+  })
+})
+
+describe('MetricsCollector — page load time', () => {
+  it('returns null when setContent is used (no new navigation)', async () => {
+    await setupPage('<p>Hello</p>')
+    const collector = new MetricsCollector(page)
+    await collector.startStep()
+    const metrics = await collector.endStep()
+    expect(metrics.pageLoadMs).toBeNull()
+  })
+
+  it('returns a positive number after a real navigation', async () => {
+    await page.goto('data:text/html,<p>Hello</p>')
+    await page.evaluate(() => {
+      (window as any).__clickCount = 0
+      document.addEventListener('click', () => (window as any).__clickCount++, true)
+    })
+    const collector = new MetricsCollector(page)
+    await collector.startStep()
+    // Navigate to a new page
+    await page.goto('data:text/html,<p>World</p>')
+    const metrics = await collector.endStep()
+    expect(metrics.pageLoadMs).not.toBeNull()
+    expect(metrics.pageLoadMs).toBeGreaterThanOrEqual(0)
   })
 })

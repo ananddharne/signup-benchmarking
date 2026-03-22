@@ -20,10 +20,7 @@ export class MetricsCollector {
     this.clickCountAtStart = await this.page.evaluate(
       () => (window as any).__clickCount ?? 0
     )
-    this.navStartTimeAtStart = await this.page.evaluate(() => {
-      const entry = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
-      return entry ? entry.startTime : 0
-    })
+    this.navStartTimeAtStart = await this.page.evaluate(() => performance.timeOrigin)
   }
 
   async endStep(): Promise<StepMetrics> {
@@ -92,7 +89,6 @@ export class MetricsCollector {
   }
 
   private async collectOAuthProviders(): Promise<string[]> {
-    const patterns = ['google', 'github', 'microsoft', 'apple', 'slack', 'okta', 'saml']
     return this.page.$$eval('a, button', (els, patterns) => {
       const found = new Set<string>()
       for (const el of els) {
@@ -103,11 +99,10 @@ export class MetricsCollector {
         }
       }
       return Array.from(found)
-    }, patterns)
+    }, OAUTH_PATTERNS)
   }
 
   private async detectMagicLink(): Promise<boolean> {
-    const patterns = ['magic link', 'passwordless', 'email me a link', 'sign in with email']
     return this.page.$$eval('a, button', (els, patterns) => {
       for (const el of els) {
         const text = (el.textContent ?? '').toLowerCase()
@@ -116,16 +111,14 @@ export class MetricsCollector {
         }
       }
       return false
-    }, patterns)
+    }, MAGIC_LINK_PATTERNS)
   }
 
   private async collectPageLoadMs(): Promise<number | null> {
-    return this.page.evaluate((navStartAtStepBegin) => {
+    return this.page.evaluate((timeOriginAtStart) => {
+      if (performance.timeOrigin === timeOriginAtStart) return null
       const entry = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
-      if (!entry) return null
-      // Return duration only if a new navigation happened since startStep()
-      if (entry.startTime <= navStartAtStepBegin) return null
-      return entry.duration
+      return entry ? entry.duration : null
     }, this.navStartTimeAtStart)
   }
 

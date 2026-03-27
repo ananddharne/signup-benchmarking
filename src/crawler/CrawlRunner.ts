@@ -1,11 +1,14 @@
 import { Stagehand } from '@browserbasehq/stagehand'
+import { chromium } from '@playwright/test'
+import type { Browser } from '@playwright/test'
 import { FlowCrawler } from './FlowCrawler'
 import { MetricsCollector } from '../metrics/MetricsCollector'
 import { ReportBuilder } from '../report/ReportBuilder'
 import type { CrawlReport } from '../schemas/report'
 
+const CDP_PORT = 9222
+
 interface CrawlRunnerOptions {
-  email?: string
   timeoutMs?: number
 }
 
@@ -14,8 +17,7 @@ export class CrawlRunner {
 
   constructor(options: CrawlRunnerOptions = {}) {
     this.options = {
-      email: options.email ?? '',
-      timeoutMs: options.timeoutMs ?? 30_000,
+      timeoutMs: options.timeoutMs ?? 120_000,
     }
   }
 
@@ -24,17 +26,26 @@ export class CrawlRunner {
 
     const stagehand = new Stagehand({
       env: 'LOCAL',
-      modelName: 'claude-3-7-sonnet-latest',
-      modelClientOptions: { apiKey: process.env.ANTHROPIC_API_KEY },
+      model: { modelName: 'anthropic/claude-sonnet-4-6', apiKey: process.env.ANTHROPIC_API_KEY },
+      localBrowserLaunchOptions: { port: CDP_PORT },
+      verbose: 1,
     })
 
     await stagehand.init()
 
-    const collector = new MetricsCollector(stagehand.page)
+    // Connect Playwright to the same Chrome instance for full DOM API access
+    let playwrightBrowser: Browser | null = null
+    playwrightBrowser = await chromium.connectOverCDP(`http://localhost:${CDP_PORT}`)
+    const pwContext = playwrightBrowser.contexts()[0]
+    const page = pwContext.pages()[0]
+
+    const stagehandPage = stagehand.context.pages()[0]
+    const collector = new MetricsCollector(page)
     const crawler = new FlowCrawler({
       stagehand,
+      page: stagehandPage as any,
+      pwPage: page,
       collector,
-      email: this.options.email || undefined,
       stepTimeoutMs: this.options.timeoutMs,
     })
 
@@ -46,6 +57,7 @@ export class CrawlRunner {
       steps = result.steps
       stoppedReason = result.stoppedReason
     } finally {
+      await playwrightBrowser?.close()
       await stagehand.close()
     }
 
@@ -53,7 +65,6 @@ export class CrawlRunner {
       url,
       category,
       crawledAt: now.toISOString(),
-      emailUsed: this.options.email || undefined,
       stoppedReason,
     })
   }

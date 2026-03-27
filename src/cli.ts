@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CrawlRunner } from './crawler/CrawlRunner'
@@ -42,16 +43,15 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const url = getArg(args, '--url')
   const csvPath = getArg(args, '--csv')
-  const email = getArg(args, '--email')
 
   if (!url && !csvPath) {
-    console.error('Usage: crawl --url <url> [--email <email>]')
-    console.error('       crawl --csv <path> [--email <email>]')
+    console.error('Usage: crawl --url <url>')
+    console.error('       crawl --csv <path>')
     process.exit(1)
   }
 
   mkdirSync('reports', { recursive: true })
-  const runner = new CrawlRunner({ email })
+  const runner = new CrawlRunner()
 
   if (url) {
     await crawlAndWrite(runner, url)

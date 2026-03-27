@@ -24,7 +24,6 @@ function makeMocks() {
   }
 
   const mockStagehand = {
-    page: mockPage,
     extract: vi.fn(),
     act: vi.fn().mockResolvedValue(undefined),
   }
@@ -39,12 +38,13 @@ function makeMocks() {
 
 describe('FlowCrawler — terminal page types', () => {
   it('stops with login_redirect on login_form', async () => {
-    const { mockStagehand, mockCollector } = makeMocks()
+    const { mockPage, mockStagehand, mockCollector } = makeMocks()
     mockStagehand.extract.mockResolvedValueOnce(
       makeClassification({ pageType: 'login_form', isTerminal: true })
     )
     const crawler = new FlowCrawler({
       stagehand: mockStagehand as any,
+      page: mockPage as any,
       collector: mockCollector as any,
     })
     const { steps, stoppedReason } = await crawler.crawl('https://example.com')
@@ -53,51 +53,51 @@ describe('FlowCrawler — terminal page types', () => {
   })
 
   it('stops with oauth_wall on oauth_consent', async () => {
-    const { mockStagehand, mockCollector } = makeMocks()
+    const { mockPage, mockStagehand, mockCollector } = makeMocks()
     mockStagehand.extract.mockResolvedValueOnce(
       makeClassification({ pageType: 'oauth_consent', isTerminal: true })
     )
-    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, collector: mockCollector as any })
+    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, page: mockPage as any, collector: mockCollector as any })
     const { stoppedReason } = await crawler.crawl('https://example.com')
     expect(stoppedReason).toBe('oauth_wall')
   })
 
   it('stops with email_verification_wall on email_verification', async () => {
-    const { mockStagehand, mockCollector } = makeMocks()
+    const { mockPage, mockStagehand, mockCollector } = makeMocks()
     mockStagehand.extract.mockResolvedValueOnce(
       makeClassification({ pageType: 'email_verification', isTerminal: true })
     )
-    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, collector: mockCollector as any })
+    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, page: mockPage as any, collector: mockCollector as any })
     const { stoppedReason } = await crawler.crawl('https://example.com')
     expect(stoppedReason).toBe('email_verification_wall')
   })
 
   it('stops with payment_wall on payment', async () => {
-    const { mockStagehand, mockCollector } = makeMocks()
+    const { mockPage, mockStagehand, mockCollector } = makeMocks()
     mockStagehand.extract.mockResolvedValueOnce(
       makeClassification({ pageType: 'payment', isTerminal: true })
     )
-    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, collector: mockCollector as any })
+    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, page: mockPage as any, collector: mockCollector as any })
     const { stoppedReason } = await crawler.crawl('https://example.com')
     expect(stoppedReason).toBe('payment_wall')
   })
 
   it('stops with dashboard_reached on dashboard', async () => {
-    const { mockStagehand, mockCollector } = makeMocks()
+    const { mockPage, mockStagehand, mockCollector } = makeMocks()
     mockStagehand.extract.mockResolvedValueOnce(
       makeClassification({ pageType: 'dashboard', isTerminal: true })
     )
-    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, collector: mockCollector as any })
+    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, page: mockPage as any, collector: mockCollector as any })
     const { stoppedReason } = await crawler.crawl('https://example.com')
     expect(stoppedReason).toBe('dashboard_reached')
   })
 
   it('stops with unclassifiable_page on unknown', async () => {
-    const { mockStagehand, mockCollector } = makeMocks()
+    const { mockPage, mockStagehand, mockCollector } = makeMocks()
     mockStagehand.extract.mockResolvedValueOnce(
       makeClassification({ pageType: 'unknown', isTerminal: true })
     )
-    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, collector: mockCollector as any })
+    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, page: mockPage as any, collector: mockCollector as any })
     const { stoppedReason } = await crawler.crawl('https://example.com')
     expect(stoppedReason).toBe('unclassifiable_page')
   })
@@ -105,47 +105,48 @@ describe('FlowCrawler — terminal page types', () => {
 
 describe('FlowCrawler — confidence: low treated as unknown', () => {
   it('stops with unclassifiable_page when confidence is low', async () => {
-    const { mockStagehand, mockCollector } = makeMocks()
+    const { mockPage, mockStagehand, mockCollector } = makeMocks()
     mockStagehand.extract.mockResolvedValueOnce(
       makeClassification({ pageType: 'signup_form', isTerminal: false, confidence: 'low' })
     )
-    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, collector: mockCollector as any })
+    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, page: mockPage as any, collector: mockCollector as any })
     const { stoppedReason } = await crawler.crawl('https://example.com')
     expect(stoppedReason).toBe('unclassifiable_page')
   })
 })
 
 describe('FlowCrawler — non-terminal steps append to steps[]', () => {
-  it('appends a StepData for landing page then stops on dashboard', async () => {
+  it('appends a StepData for signup_form then stops on dashboard', async () => {
     const { mockStagehand, mockCollector, mockPage } = makeMocks()
-    // First classification: landing (non-terminal)
-    // extract() is called for both page classification AND the landing CTA detection
+    // First classification: signup_form (non-terminal)
+    // extract() is called for classification then for validation errors after submit
     mockStagehand.extract
-      .mockResolvedValueOnce(makeClassification({ pageType: 'landing', isTerminal: false }))
-      .mockResolvedValueOnce({ signupUrl: 'https://example.com/signup', signupText: 'Sign up' })
+      .mockResolvedValueOnce(makeClassification({ pageType: 'signup_form', isTerminal: false }))
+      .mockResolvedValueOnce({ hasErrors: false, errors: [] })
       // Second iteration: dashboard (terminal)
       .mockResolvedValueOnce(makeClassification({ pageType: 'dashboard', isTerminal: true }))
 
-    mockPage.url.mockReturnValue('https://example.com/signup')
+    mockPage.url.mockReturnValue('https://example.com/dashboard')
 
-    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, collector: mockCollector as any })
-    const { steps, stoppedReason } = await crawler.crawl('https://example.com')
+    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, page: mockPage as any, collector: mockCollector as any })
+    const { steps, stoppedReason } = await crawler.crawl('https://example.com/signup')
 
     expect(stoppedReason).toBe('dashboard_reached')
     expect(steps).toHaveLength(1)
-    expect(steps[0].pageType).toBe('landing')
+    expect(steps[0].pageType).toBe('signup_form')
   })
 })
 
 describe('FlowCrawler — max steps', () => {
   it('stops with max_steps_reached after maxSteps non-terminal steps', async () => {
-    const { mockStagehand, mockCollector } = makeMocks()
+    const { mockPage, mockStagehand, mockCollector } = makeMocks()
     // Always return a non-terminal onboarding_step
     mockStagehand.extract.mockResolvedValue(
       makeClassification({ pageType: 'onboarding_step', isTerminal: false })
     )
     const crawler = new FlowCrawler({
       stagehand: mockStagehand as any,
+      page: mockPage as any,
       collector: mockCollector as any,
       maxSteps: 3,
     })
@@ -157,9 +158,9 @@ describe('FlowCrawler — max steps', () => {
 
 describe('FlowCrawler — error handling', () => {
   it('returns partial report with stoppedReason=error when extract throws', async () => {
-    const { mockStagehand, mockCollector } = makeMocks()
+    const { mockPage, mockStagehand, mockCollector } = makeMocks()
     mockStagehand.extract.mockRejectedValueOnce(new Error('Network error'))
-    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, collector: mockCollector as any })
+    const crawler = new FlowCrawler({ stagehand: mockStagehand as any, page: mockPage as any, collector: mockCollector as any })
     const { steps, stoppedReason } = await crawler.crawl('https://example.com')
     expect(stoppedReason).toBe('error')
     expect(steps).toHaveLength(0)

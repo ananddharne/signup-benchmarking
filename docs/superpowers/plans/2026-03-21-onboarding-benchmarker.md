@@ -1300,7 +1300,7 @@ import type { StepData } from '../schemas/metrics'
 import type { StoppedReason } from '../schemas/report'
 
 const DUMMY_USER = {
-  name: 'Alex Bench',
+  name: 'alexbench',
   company: 'Benchmark Co',
   password: 'Bench!2024x',
 }

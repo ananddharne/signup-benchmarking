@@ -10,6 +10,9 @@ export class MetricsCollector {
   private stepStartTime = 0
   private clickCountAtStart = 0
   private navStartTimeAtStart = 0
+  private clickCountPreDispatch: number | null = null
+  private formFieldsSnapshot: Awaited<ReturnType<MetricsCollector['collectFormFields']>> | null = null
+  private dispatchInteractions = 0
 
   constructor(page: Page) {
     this.page = page
@@ -21,6 +24,24 @@ export class MetricsCollector {
       () => (window as any).__clickCount ?? 0
     )
     this.navStartTimeAtStart = await this.page.evaluate(() => performance.timeOrigin)
+    this.clickCountPreDispatch = null
+    this.formFieldsSnapshot = null
+    this.dispatchInteractions = 0
+  }
+
+  recordInteraction(): void {
+    this.dispatchInteractions++
+  }
+
+  // Call this right before dispatch() so we capture metrics while still on the current page.
+  // Navigation during dispatch resets window.__clickCount and removes form fields from the DOM.
+  async snapshotBeforeDispatch(): Promise<void> {
+    const [clicks, fields] = await Promise.all([
+      this.page.evaluate(() => (window as any).__clickCount ?? 0),
+      this.collectFormFields(),
+    ])
+    this.clickCountPreDispatch = clicks
+    this.formFieldsSnapshot = fields
   }
 
   async endStep(): Promise<StepMetrics> {
@@ -47,9 +68,14 @@ export class MetricsCollector {
       this.page.evaluate(() => document.querySelectorAll('*').length),
     ])
 
+    const preDispatchClicks = this.clickCountPreDispatch !== null
+      ? this.clickCountPreDispatch - this.clickCountAtStart
+      : clickCountNow - this.clickCountAtStart
+    const effectiveClickCount = preDispatchClicks + this.dispatchInteractions
+
     return {
-      clickCount: clickCountNow - this.clickCountAtStart,
-      formFields,
+      clickCount: effectiveClickCount,
+      formFields: this.formFieldsSnapshot ?? formFields,
       oauthProviders,
       hasMagicLink,
       pageLoadMs,

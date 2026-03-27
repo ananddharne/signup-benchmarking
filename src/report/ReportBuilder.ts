@@ -19,7 +19,7 @@ export class ReportBuilder {
     const requiresOnboardingSurvey = steps.some(s => s.pageType === 'onboarding_survey')
 
     const flowPath = steps.map(s => s.pageType)
-    const completedSuccessfully = meta.stoppedReason === 'dashboard_reached'
+    const completedSuccessfully = meta.stoppedReason === 'dashboard_reached' || meta.stoppedReason === 'signup_completed'
 
     const report: CrawlReport = {
       url: meta.url,

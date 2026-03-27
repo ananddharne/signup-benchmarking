@@ -3,6 +3,7 @@ import { PageTypeSchema } from './page'
 import { StepDataSchema } from './metrics'
 
 export const StoppedReasonSchema = z.enum([
+  'signup_completed',
   'dashboard_reached',
   'email_verification_wall',
   'oauth_wall',

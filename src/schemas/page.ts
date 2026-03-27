@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 export const PageTypeSchema = z.enum([
   'landing', 'signup_form', 'login_form', 'oauth_consent',
-  'email_verification', 'onboarding_step', 'onboarding_survey',
+  'email_verification', 'captcha', 'onboarding_step', 'onboarding_survey',
   'workspace_setup', 'plan_selection', 'payment', 'dashboard', 'unknown'
 ])
 
